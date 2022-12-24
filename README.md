@@ -1,4 +1,4 @@
-### ARM-on-Claims-data
+# ARM-on-Claims-data
 This repository contains source codes for the paper 
 “Early detection of adverse drug reaction signals by association rule mining using large-scale administrative claims data”
 
@@ -7,7 +7,3 @@ To evaluate the performance of the data-mining approach in detecting adverse dru
 
 Association rule mining on administrative claims data for ADR signal detection has the potential to serve as a complementary tool for existing pharmacovigilance strategies.
 
-
-# Study Highlights
-## Study Highlights
-### Study Highlights
