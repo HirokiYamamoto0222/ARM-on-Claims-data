@@ -3,7 +3,6 @@ This repository contains source codes for the paper
 “Early detection of adverse drug reaction signals by association rule mining using large-scale administrative claims data”
 
 <br>
-<br>  
 
 ### Study Highlights
 1. To evaluate the performance of the data-mining approach in detecting adverse drug reaction (ADR) signals, 
