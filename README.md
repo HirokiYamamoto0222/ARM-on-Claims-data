@@ -1,4 +1,4 @@
-#### ARM-on-Claims-data
+### ARM-on-Claims-data
 This repository contains the source code for the paper 
 “Early detection of adverse drug reaction signals by association rule mining using large-scale administrative claims data”
 
