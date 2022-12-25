@@ -1,0 +1,4582 @@
+## MEMO ########################
+-- Sequence Symmetry Analysis
+## Conventional benchmark
+################################
+-- 0. Database
+use JMDC_Claims
+
+
+###############################################
+-- 1. Preparation for result table-- Sequence Symmetry Analysis(ESSA)結果用テーブルの作成
+DROP TABLE IF EXISTS SSA_Analysis_15y_CB;
+CREATE TABLE SSA_Analysis_15y_CB(
+    Ingredient VARCHAR(255),
+    ICD10class VARCHAR(255),
+    Runinperiod INT(11) DEFAULT NULL,
+    Term INT(11) DEFAULT NULL,
+    `A→E` INT(11) DEFAULT NULL,
+    `E→A` INT(11) DEFAULT NULL,
+    `A=E` INT(11) DEFAULT NULL,
+    `CSR` DECIMAL(8, 5) DEFAULT NULL,
+    `CSR 95%CI Lower` DECIMAL(8, 5) DEFAULT NULL,
+    `CSR 95%CI Upper` DECIMAL(8, 5) DEFAULT NULL,
+    `NSR` DECIMAL(8, 5) DEFAULT NULL,
+    `ASR` DECIMAL(8, 5) DEFAULT NULL,
+    `ASR 95%CI Lower` DECIMAL(8, 5) DEFAULT NULL,
+    `ASR 95%CI Upper` DECIMAL(8, 5) DEFAULT NULL, 
+    Ground_Truth INT(11) DEFAULT NULL
+)
+;
+
+
+-- Table name "JMDC_ARM_SQLdata_15y" is pre-created in "1_JMDC_ARM_Performance.sql"
+
+###############################################
+-- 2. Procedure
+DROP PROCEDURE IF EXISTS ESSA_PROCEDURE;
+DELIMITER //
+CREATE PROCEDURE ESSA_PROCEDURE(Ingredient VARCHAR(255), ICD10class VARCHAR(255), Runinperiod INT(11), Ground_Truth INT(11))
+BEGIN
+	
+
+-- 2.1 Create drug table
+DROP TABLE IF EXISTS Drug_A;
+SET
+    @tablecreate1 = CONCAT('CREATE TABLE Drug_A 
+    						SELECT 
+    							加入者ID, Evday AS Amin
+						    FROM 
+						    	JMDC_ARM_SQLdata_15y
+						    WHERE 
+						    	Item IN ("', Ingredient, '") 
+						    ;');
+PREPARE tablecreate1 FROM @tablecreate1;
+EXECUTE tablecreate1;
+ALTER TABLE Drug_A ADD INDEX index01(加入者ID);
+
+
+-- 2.2 Create event table
+DROP TABLE IF EXISTS Event_E;
+SET @tablecreate2 = CONCAT('CREATE TABLE Event_E 
+							SELECT 
+								加入者ID, Evday AS Emin 
+						    FROM 
+						    	JMDC_ARM_SQLdata_15y 
+							WHERE 
+								Item IN ("',ICD10class,'") 
+							;');
+PREPARE tablecreate2 FROM @tablecreate2;
+EXECUTE tablecreate2;
+ALTER TABLE Event_E ADD INDEX index01(加入者ID); 
+
+
+#########################################
+-- 3. Sequence Symmetry Analysis
+-- 3.1 Table making
+DROP TABLE IF EXISTS A_JMDC_ESSA;
+CREATE TABLE A_JMDC_ESSA
+SELECT
+    t1.加入者ID,
+    Amin,
+    Emin
+FROM
+    Drug_A AS t1
+    INNER JOIN Event_E AS t2 USING(加入者ID)
+;
+ALTER TABLE A_JMDC_ESSA ADD INDEX index01(Amin, Emin, 加入者ID);
+
+
+-- 3.2 Calculation of the number of ID initiating drug
+DROP TABLE IF EXISTS Incident_exposure;
+SET @nsrtable = CONCAT('
+	CREATE TABLE Incident_exposure
+	SELECT 
+		Amin, COUNT(DISTINCT 加入者ID) AS Count
+	FROM
+		Drug_A
+	GROUP BY
+		Amin
+	;');
+PREPARE nsrtable FROM @nsrtable;
+EXECUTE nsrtable;
+
+
+-- 3.3 Calculation of the number of ID registered for the event
+DROP TABLE IF EXISTS Incident_outcome;
+SET @nsrtable = CONCAT('
+	CREATE TABLE Incident_outcome
+	SELECT 
+		Emin, COUNT(DISTINCT 加入者ID) AS Count
+	FROM
+		Event_E
+	GROUP BY
+		Emin
+	;');
+PREPARE nsrtable FROM @nsrtable;
+EXECUTE nsrtable;
+
+
+-- SELECT PERIOD_DIFF(201908, 200507);
+-- 169 months
+SELECT 169 INTO @Term;
+
+		
+-- 3.4 The number of 'drug → event'
+SET @analysis1 = CONCAT('SELECT 
+							COUNT(加入者ID) INTO @a 
+						 FROM 
+						 	A_JMDC_ESSA 
+						 WHERE 
+							Emin > Amin
+						 AND 
+						 	PERIOD_DIFF(Emin, Amin) <= @Term
+						 ;');
+PREPARE analysis1 FROM @analysis1;
+EXECUTE analysis1;
+
+
+-- 3.5 The number of 'event → drug'
+SET @analysis2 = CONCAT('SELECT 
+							COUNT(加入者ID) INTO @b 
+						 FROM 
+						 	A_JMDC_ESSA 
+						 WHERE 
+						 	Emin < Amin
+						 AND 
+						 	PERIOD_DIFF(Amin, Emin) <= @Term
+						 ;');
+PREPARE analysis2 FROM @analysis2;
+EXECUTE analysis2;
+
+
+-- 3.6 The number of 'drug = event'
+SET @analysis3 = CONCAT('SELECT 
+							COUNT(加入者ID) INTO @c FROM A_JMDC_ESSA 
+						 WHERE 
+						 	Emin = Amin
+						 ;');
+PREPARE analysis3 FROM @analysis3;
+EXECUTE analysis3;
+
+
+-- 3.7 Caluculation of NSR
+DROP TABLE IF EXISTS NSR_MonthTable;
+CREATE TABLE NSR_MonthTable(
+       Months INT(11) default NULL
+) 
+;
+
+INSERT INTO NSR_MonthTable SELECT 200507; INSERT INTO NSR_MonthTable SELECT 200508;
+INSERT INTO NSR_MonthTable SELECT 200509; INSERT INTO NSR_MonthTable SELECT 200510;
+INSERT INTO NSR_MonthTable SELECT 200511; INSERT INTO NSR_MonthTable SELECT 200512;
+
+INSERT INTO NSR_MonthTable SELECT 200601; INSERT INTO NSR_MonthTable SELECT 200602;
+INSERT INTO NSR_MonthTable SELECT 200603; INSERT INTO NSR_MonthTable SELECT 200604;
+INSERT INTO NSR_MonthTable SELECT 200605; INSERT INTO NSR_MonthTable SELECT 200606;
+INSERT INTO NSR_MonthTable SELECT 200607; INSERT INTO NSR_MonthTable SELECT 200608;
+INSERT INTO NSR_MonthTable SELECT 200609; INSERT INTO NSR_MonthTable SELECT 200610;
+INSERT INTO NSR_MonthTable SELECT 200611; INSERT INTO NSR_MonthTable SELECT 200612;
+
+INSERT INTO NSR_MonthTable SELECT 200701; INSERT INTO NSR_MonthTable SELECT 200702;
+INSERT INTO NSR_MonthTable SELECT 200703; INSERT INTO NSR_MonthTable SELECT 200704;
+INSERT INTO NSR_MonthTable SELECT 200705; INSERT INTO NSR_MonthTable SELECT 200706;
+INSERT INTO NSR_MonthTable SELECT 200707; INSERT INTO NSR_MonthTable SELECT 200708;
+INSERT INTO NSR_MonthTable SELECT 200709; INSERT INTO NSR_MonthTable SELECT 200710;
+INSERT INTO NSR_MonthTable SELECT 200711; INSERT INTO NSR_MonthTable SELECT 200712;
+
+INSERT INTO NSR_MonthTable SELECT 200801; INSERT INTO NSR_MonthTable SELECT 200802;
+INSERT INTO NSR_MonthTable SELECT 200803; INSERT INTO NSR_MonthTable SELECT 200804;
+INSERT INTO NSR_MonthTable SELECT 200805; INSERT INTO NSR_MonthTable SELECT 200806;
+INSERT INTO NSR_MonthTable SELECT 200807; INSERT INTO NSR_MonthTable SELECT 200808;
+INSERT INTO NSR_MonthTable SELECT 200809; INSERT INTO NSR_MonthTable SELECT 200810;
+INSERT INTO NSR_MonthTable SELECT 200811; INSERT INTO NSR_MonthTable SELECT 200812;
+
+INSERT INTO NSR_MonthTable SELECT 200901; INSERT INTO NSR_MonthTable SELECT 200902;
+INSERT INTO NSR_MonthTable SELECT 200903; INSERT INTO NSR_MonthTable SELECT 200904;
+INSERT INTO NSR_MonthTable SELECT 200905; INSERT INTO NSR_MonthTable SELECT 200906;
+INSERT INTO NSR_MonthTable SELECT 200907; INSERT INTO NSR_MonthTable SELECT 200908;
+INSERT INTO NSR_MonthTable SELECT 200909; INSERT INTO NSR_MonthTable SELECT 200910;
+INSERT INTO NSR_MonthTable SELECT 200911; INSERT INTO NSR_MonthTable SELECT 200912;
+
+INSERT INTO NSR_MonthTable SELECT 201001; INSERT INTO NSR_MonthTable SELECT 201002;
+INSERT INTO NSR_MonthTable SELECT 201003; INSERT INTO NSR_MonthTable SELECT 201004;
+INSERT INTO NSR_MonthTable SELECT 201005; INSERT INTO NSR_MonthTable SELECT 201006;
+INSERT INTO NSR_MonthTable SELECT 201007; INSERT INTO NSR_MonthTable SELECT 201008;
+INSERT INTO NSR_MonthTable SELECT 201009; INSERT INTO NSR_MonthTable SELECT 201010;
+INSERT INTO NSR_MonthTable SELECT 201011; INSERT INTO NSR_MonthTable SELECT 201012;
+
+INSERT INTO NSR_MonthTable SELECT 201101; INSERT INTO NSR_MonthTable SELECT 201102;
+INSERT INTO NSR_MonthTable SELECT 201103; INSERT INTO NSR_MonthTable SELECT 201104;
+INSERT INTO NSR_MonthTable SELECT 201105; INSERT INTO NSR_MonthTable SELECT 201106;
+INSERT INTO NSR_MonthTable SELECT 201107; INSERT INTO NSR_MonthTable SELECT 201108;
+INSERT INTO NSR_MonthTable SELECT 201109; INSERT INTO NSR_MonthTable SELECT 201110;
+INSERT INTO NSR_MonthTable SELECT 201111; INSERT INTO NSR_MonthTable SELECT 201112;
+
+INSERT INTO NSR_MonthTable SELECT 201201; INSERT INTO NSR_MonthTable SELECT 201202;
+INSERT INTO NSR_MonthTable SELECT 201203; INSERT INTO NSR_MonthTable SELECT 201204;
+INSERT INTO NSR_MonthTable SELECT 201205; INSERT INTO NSR_MonthTable SELECT 201206;
+INSERT INTO NSR_MonthTable SELECT 201207; INSERT INTO NSR_MonthTable SELECT 201208;
+INSERT INTO NSR_MonthTable SELECT 201209; INSERT INTO NSR_MonthTable SELECT 201210;
+INSERT INTO NSR_MonthTable SELECT 201211; INSERT INTO NSR_MonthTable SELECT 201212;
+
+INSERT INTO NSR_MonthTable SELECT 201301; INSERT INTO NSR_MonthTable SELECT 201302;
+INSERT INTO NSR_MonthTable SELECT 201303; INSERT INTO NSR_MonthTable SELECT 201304;
+INSERT INTO NSR_MonthTable SELECT 201305; INSERT INTO NSR_MonthTable SELECT 201306;
+INSERT INTO NSR_MonthTable SELECT 201307; INSERT INTO NSR_MonthTable SELECT 201308;
+INSERT INTO NSR_MonthTable SELECT 201309; INSERT INTO NSR_MonthTable SELECT 201310;
+INSERT INTO NSR_MonthTable SELECT 201311; INSERT INTO NSR_MonthTable SELECT 201312;
+
+INSERT INTO NSR_MonthTable SELECT 201401; INSERT INTO NSR_MonthTable SELECT 201402;
+INSERT INTO NSR_MonthTable SELECT 201403; INSERT INTO NSR_MonthTable SELECT 201404;
+INSERT INTO NSR_MonthTable SELECT 201405; INSERT INTO NSR_MonthTable SELECT 201406;
+INSERT INTO NSR_MonthTable SELECT 201407; INSERT INTO NSR_MonthTable SELECT 201408;
+INSERT INTO NSR_MonthTable SELECT 201409; INSERT INTO NSR_MonthTable SELECT 201410;
+INSERT INTO NSR_MonthTable SELECT 201411; INSERT INTO NSR_MonthTable SELECT 201412;
+
+INSERT INTO NSR_MonthTable SELECT 201501; INSERT INTO NSR_MonthTable SELECT 201502;
+INSERT INTO NSR_MonthTable SELECT 201503; INSERT INTO NSR_MonthTable SELECT 201504;
+INSERT INTO NSR_MonthTable SELECT 201505; INSERT INTO NSR_MonthTable SELECT 201506;
+INSERT INTO NSR_MonthTable SELECT 201507; INSERT INTO NSR_MonthTable SELECT 201508;
+INSERT INTO NSR_MonthTable SELECT 201509; INSERT INTO NSR_MonthTable SELECT 201510;
+INSERT INTO NSR_MonthTable SELECT 201511; INSERT INTO NSR_MonthTable SELECT 201512;
+
+INSERT INTO NSR_MonthTable SELECT 201601; INSERT INTO NSR_MonthTable SELECT 201602;
+INSERT INTO NSR_MonthTable SELECT 201603; INSERT INTO NSR_MonthTable SELECT 201604;
+INSERT INTO NSR_MonthTable SELECT 201605; INSERT INTO NSR_MonthTable SELECT 201606;
+INSERT INTO NSR_MonthTable SELECT 201607; INSERT INTO NSR_MonthTable SELECT 201608;
+INSERT INTO NSR_MonthTable SELECT 201609; INSERT INTO NSR_MonthTable SELECT 201610;
+INSERT INTO NSR_MonthTable SELECT 201611; INSERT INTO NSR_MonthTable SELECT 201612;
+
+INSERT INTO NSR_MonthTable SELECT 201701; INSERT INTO NSR_MonthTable SELECT 201702;
+INSERT INTO NSR_MonthTable SELECT 201703; INSERT INTO NSR_MonthTable SELECT 201704;
+INSERT INTO NSR_MonthTable SELECT 201705; INSERT INTO NSR_MonthTable SELECT 201706;
+INSERT INTO NSR_MonthTable SELECT 201707; INSERT INTO NSR_MonthTable SELECT 201708;
+INSERT INTO NSR_MonthTable SELECT 201709; INSERT INTO NSR_MonthTable SELECT 201710;
+INSERT INTO NSR_MonthTable SELECT 201711; INSERT INTO NSR_MonthTable SELECT 201712;
+
+INSERT INTO NSR_MonthTable SELECT 201801; INSERT INTO NSR_MonthTable SELECT 201802;
+INSERT INTO NSR_MonthTable SELECT 201803; INSERT INTO NSR_MonthTable SELECT 201804;
+INSERT INTO NSR_MonthTable SELECT 201805; INSERT INTO NSR_MonthTable SELECT 201806;
+INSERT INTO NSR_MonthTable SELECT 201807; INSERT INTO NSR_MonthTable SELECT 201808;
+INSERT INTO NSR_MonthTable SELECT 201809; INSERT INTO NSR_MonthTable SELECT 201810;
+INSERT INTO NSR_MonthTable SELECT 201811; INSERT INTO NSR_MonthTable SELECT 201812;
+
+INSERT INTO NSR_MonthTable SELECT 201901; INSERT INTO NSR_MonthTable SELECT 201902;
+INSERT INTO NSR_MonthTable SELECT 201903; INSERT INTO NSR_MonthTable SELECT 201904;
+INSERT INTO NSR_MonthTable SELECT 201905; INSERT INTO NSR_MonthTable SELECT 201906;
+INSERT INTO NSR_MonthTable SELECT 201907; INSERT INTO NSR_MonthTable SELECT 201908;
+
+
+DROP TABLE IF EXISTS preEventTotal;
+CREATE TABLE IF NOT EXISTS preEventTotal(
+       Months INT(11) DEFAULT NULL,
+       preTotal INT(11) DEFAULT NULL
+)
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	200507, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200507, -@Term) 
+AND 
+	Emin < 200507
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200508, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200508, -@Term) 
+AND 
+	Emin < 200508
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200509, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200509, -@Term) 
+AND 
+	Emin < 200509
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200510, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200510, -@Term) 
+AND 
+	Emin < 200510
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200511, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200511, -@Term) 
+AND 
+	Emin < 200511
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200512, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200512, -@Term) 
+AND 
+	Emin < 200512
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	200601, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200601, -@Term) 
+AND 
+	Emin < 200601
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200602, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200602, -@Term) 
+AND 
+	Emin < 200602
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200603, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200603, -@Term) 
+AND 
+	Emin < 200603
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200604, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200604, -@Term) 
+AND 
+	Emin < 200604
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200605, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200605, -@Term) 
+AND 
+	Emin < 200605
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200606, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200606, -@Term) 
+AND 
+	Emin < 200606
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200607, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200607, -@Term) 
+AND 
+	Emin < 200607
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200608, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200608, -@Term) 
+AND 
+	Emin < 200608
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200609, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200609, -@Term) 
+AND 
+	Emin < 200609
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200610, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200610, -@Term) 
+AND 
+	Emin < 200610
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200611, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200611, -@Term) 
+AND 
+	Emin < 200611
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200612, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200612, -@Term) 
+AND 
+	Emin < 200612
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	200701, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200701, -@Term) 
+AND 
+	Emin < 200701
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200702, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200702, -@Term) 
+AND 
+	Emin < 200702
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200703, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200703, -@Term) 
+AND 
+	Emin < 200703
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200704, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200704, -@Term) 
+AND 
+	Emin < 200704
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200705, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200705, -@Term) 
+AND 
+	Emin < 200705
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200706, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200706, -@Term) 
+AND 
+	Emin < 200706
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200707, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200707, -@Term) 
+AND 
+	Emin < 200707
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200708, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200708, -@Term) 
+AND 
+	Emin < 200708
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200709, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200709, -@Term) 
+AND 
+	Emin < 200709
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200710, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200710, -@Term) 
+AND 
+	Emin < 200710
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200711, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200711, -@Term) 
+AND 
+	Emin < 200711
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200712, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200712, -@Term) 
+AND 
+	Emin < 200712
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	200801, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200801, -@Term) 
+AND 
+	Emin < 200801
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200802, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200802, -@Term) 
+AND 
+	Emin < 200802
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200803, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200803, -@Term) 
+AND 
+	Emin < 200803
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200804, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200804, -@Term) 
+AND 
+	Emin < 200804
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200805, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200805, -@Term) 
+AND 
+	Emin < 200805
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200806, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200806, -@Term) 
+AND 
+	Emin < 200806
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200807, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200807, -@Term) 
+AND 
+	Emin < 200807
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200808, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200808, -@Term) 
+AND 
+	Emin < 200808
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200809, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200809, -@Term) 
+AND 
+	Emin < 200809
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200810, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200810, -@Term) 
+AND 
+	Emin < 200810
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200811, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200811, -@Term) 
+AND 
+	Emin < 200811
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200812, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200812, -@Term) 
+AND 
+	Emin < 200812
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	200901, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200901, -@Term) 
+AND 
+	Emin < 200901
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200902, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200902, -@Term) 
+AND 
+	Emin < 200902
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200903, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200903, -@Term) 
+AND 
+	Emin < 200903
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200904, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200904, -@Term) 
+AND 
+	Emin < 200904
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200905, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200905, -@Term) 
+AND 
+	Emin < 200905
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200906, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200906, -@Term) 
+AND 
+	Emin < 200906
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200907, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200907, -@Term) 
+AND 
+	Emin < 200907
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200908, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200908, -@Term) 
+AND 
+	Emin < 200908
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200909, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200909, -@Term) 
+AND 
+	Emin < 200909
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200910, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200910, -@Term) 
+AND 
+	Emin < 200910
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200911, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200911, -@Term) 
+AND 
+	Emin < 200911
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	200912, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(200912, -@Term) 
+AND 
+	Emin < 200912
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201001, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201001, -@Term) 
+AND 
+	Emin < 201001
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201002, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201002, -@Term) 
+AND 
+	Emin < 201002
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201003, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201003, -@Term) 
+AND 
+	Emin < 201003
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201004, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201004, -@Term) 
+AND 
+	Emin < 201004
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201005, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201005, -@Term) 
+AND 
+	Emin < 201005
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201006, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201006, -@Term) 
+AND 
+	Emin < 201006
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201007, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201007, -@Term) 
+AND 
+	Emin < 201007
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201008, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201008, -@Term) 
+AND 
+	Emin < 201008
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201009, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201009, -@Term) 
+AND 
+	Emin < 201009
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201010, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201010, -@Term) 
+AND 
+	Emin < 201010
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201011, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201011, -@Term) 
+AND 
+	Emin < 201011
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201012, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201012, -@Term) 
+AND 
+	Emin < 201012
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201101, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201101, -@Term) 
+AND 
+	Emin < 201101
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201102, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201102, -@Term) 
+AND 
+	Emin < 201102
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201103, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201103, -@Term) 
+AND 
+	Emin < 201103
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201104, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201104, -@Term) 
+AND 
+	Emin < 201104
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201105, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201105, -@Term) 
+AND 
+	Emin < 201105
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201106, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201106, -@Term) 
+AND 
+	Emin < 201106
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201107, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201107, -@Term) 
+AND 
+	Emin < 201107
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201108, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201108, -@Term) 
+AND 
+	Emin < 201108
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201109, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201109, -@Term) 
+AND 
+	Emin < 201109
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201110, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201110, -@Term) 
+AND 
+	Emin < 201110
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201111, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201111, -@Term) 
+AND 
+	Emin < 201111
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201112, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201112, -@Term) 
+AND 
+	Emin < 201112
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201201, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201201, -@Term) 
+AND 
+	Emin < 201201
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201202, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201202, -@Term) 
+AND 
+	Emin < 201202
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201203, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201203, -@Term) 
+AND 
+	Emin < 201203
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201204, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201204, -@Term) 
+AND 
+	Emin < 201204
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201205, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201205, -@Term) 
+AND 
+	Emin < 201205
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201206, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201206, -@Term) 
+AND 
+	Emin < 201206
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201207, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201207, -@Term) 
+AND 
+	Emin < 201207
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201208, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201208, -@Term) 
+AND 
+	Emin < 201208
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201209, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201209, -@Term) 
+AND 
+	Emin < 201209
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201210, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201210, -@Term) 
+AND 
+	Emin < 201210
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201211, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201211, -@Term) 
+AND 
+	Emin < 201211
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201212, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201212, -@Term) 
+AND 
+	Emin < 201212
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201301, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201301, -@Term) 
+AND 
+	Emin < 201301
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201302, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201302, -@Term) 
+AND 
+	Emin < 201302
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201303, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201303, -@Term) 
+AND 
+	Emin < 201303
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201304, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201304, -@Term) 
+AND 
+	Emin < 201304
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201305, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201305, -@Term) 
+AND 
+	Emin < 201305
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201306, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201306, -@Term) 
+AND 
+	Emin < 201306
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201307, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201307, -@Term) 
+AND 
+	Emin < 201307
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201308, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201308, -@Term) 
+AND 
+	Emin < 201308
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201309, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201309, -@Term) 
+AND 
+	Emin < 201309
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201310, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201310, -@Term) 
+AND 
+	Emin < 201310
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201311, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201311, -@Term) 
+AND 
+	Emin < 201311
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201312, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201312, -@Term) 
+AND 
+	Emin < 201312
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201401, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201401, -@Term) 
+AND 
+	Emin < 201401
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201402, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201402, -@Term) 
+AND 
+	Emin < 201402
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201403, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201403, -@Term) 
+AND 
+	Emin < 201403
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201404, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201404, -@Term) 
+AND 
+	Emin < 201404
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201405, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201405, -@Term) 
+AND 
+	Emin < 201405
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201406, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201406, -@Term) 
+AND 
+	Emin < 201406
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201407, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201407, -@Term) 
+AND 
+	Emin < 201407
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201408, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201408, -@Term) 
+AND 
+	Emin < 201408
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201409, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201409, -@Term) 
+AND 
+	Emin < 201409
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201410, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201410, -@Term) 
+AND 
+	Emin < 201410
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201411, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201411, -@Term) 
+AND 
+	Emin < 201411
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201412, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201412, -@Term) 
+AND 
+	Emin < 201412
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201501, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201501, -@Term) 
+AND 
+	Emin < 201501
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201502, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201502, -@Term) 
+AND 
+	Emin < 201502
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201503, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201503, -@Term) 
+AND 
+	Emin < 201503
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201504, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201504, -@Term) 
+AND 
+	Emin < 201504
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201505, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201505, -@Term) 
+AND 
+	Emin < 201505
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201506, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201506, -@Term) 
+AND 
+	Emin < 201506
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201507, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201507, -@Term) 
+AND 
+	Emin < 201507
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201508, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201508, -@Term) 
+AND 
+	Emin < 201508
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201509, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201509, -@Term) 
+AND 
+	Emin < 201509
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201510, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201510, -@Term) 
+AND 
+	Emin < 201510
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201511, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201511, -@Term) 
+AND 
+	Emin < 201511
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201512, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201512, -@Term) 
+AND 
+	Emin < 201512
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201601, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201601, -@Term) 
+AND 
+	Emin < 201601
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201602, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201602, -@Term) 
+AND 
+	Emin < 201602
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201603, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201603, -@Term) 
+AND 
+	Emin < 201603
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201604, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201604, -@Term) 
+AND 
+	Emin < 201604
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201605, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201605, -@Term) 
+AND 
+	Emin < 201605
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201606, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201606, -@Term) 
+AND 
+	Emin < 201606
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201607, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201607, -@Term) 
+AND 
+	Emin < 201607
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201608, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201608, -@Term) 
+AND 
+	Emin < 201608
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201609, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201609, -@Term) 
+AND 
+	Emin < 201609
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201610, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201610, -@Term) 
+AND 
+	Emin < 201610
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201611, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201611, -@Term) 
+AND 
+	Emin < 201611
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201612, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201612, -@Term) 
+AND 
+	Emin < 201612
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201701, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201701, -@Term) 
+AND 
+	Emin < 201701
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201702, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201702, -@Term) 
+AND 
+	Emin < 201702
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201703, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201703, -@Term) 
+AND 
+	Emin < 201703
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201704, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201704, -@Term) 
+AND 
+	Emin < 201704
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201705, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201705, -@Term) 
+AND 
+	Emin < 201705
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201706, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201706, -@Term) 
+AND 
+	Emin < 201706
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201707, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201707, -@Term) 
+AND 
+	Emin < 201707
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201708, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201708, -@Term) 
+AND 
+	Emin < 201708
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201709, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201709, -@Term) 
+AND 
+	Emin < 201709
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201710, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201710, -@Term) 
+AND 
+	Emin < 201710
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201711, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201711, -@Term) 
+AND 
+	Emin < 201711
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201712, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201712, -@Term) 
+AND 
+	Emin < 201712
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201801, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201801, -@Term) 
+AND 
+	Emin < 201801
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201802, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201802, -@Term) 
+AND 
+	Emin < 201802
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201803, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201803, -@Term) 
+AND 
+	Emin < 201803
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201804, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201804, -@Term) 
+AND 
+	Emin < 201804
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201805, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201805, -@Term) 
+AND 
+	Emin < 201805
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201806, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201806, -@Term) 
+AND 
+	Emin < 201806
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201807, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201807, -@Term) 
+AND 
+	Emin < 201807
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201808, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201808, -@Term) 
+AND 
+	Emin < 201808
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201809, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201809, -@Term) 
+AND 
+	Emin < 201809
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201810, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201810, -@Term) 
+AND 
+	Emin < 201810
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201811, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201811, -@Term) 
+AND 
+	Emin < 201811
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201812, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201812, -@Term) 
+AND 
+	Emin < 201812
+;
+
+-- 
+INSERT INTO preEventTotal 
+SELECT 
+	201901, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201901, -@Term) 
+AND 
+	Emin < 201901
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201902, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201902, -@Term) 
+AND 
+	Emin < 201902
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201903, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201903, -@Term) 
+AND 
+	Emin < 201903
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201904, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201904, -@Term) 
+AND 
+	Emin < 201904
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201905, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201905, -@Term) 
+AND 
+	Emin < 201905
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201906, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201906, -@Term) 
+AND 
+	Emin < 201906
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201907, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201907, -@Term) 
+AND 
+	Emin < 201907
+;
+
+INSERT INTO preEventTotal 
+SELECT 
+	201908, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin >= PERIOD_ADD(201908, -@Term) 
+AND 
+	Emin < 201908
+;
+
+
+DROP TABLE IF EXISTS postEventTotal;
+CREATE TABLE IF NOT EXISTS postEventTotal(
+       Months INT(11) DEFAULT NULL,
+       postTotal INT(11) DEFAULT NULL
+)
+;
+
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	200507, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200507, @Term) 
+AND 
+	Emin > 200507
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200508, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200508, @Term) 
+AND 
+	Emin > 200508
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200509, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200509, @Term) 
+AND 
+	Emin > 200509
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200510, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200510, @Term) 
+AND 
+	Emin > 200510
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200511, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200511, @Term) 
+AND 
+	Emin > 200511
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200512, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200512, @Term) 
+AND 
+	Emin > 200512
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	200601, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200601, @Term) 
+AND 
+	Emin > 200601
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200602, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200602, @Term) 
+AND 
+	Emin > 200602
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200603, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200603, @Term) 
+AND 
+	Emin > 200603
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200604, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200604, @Term) 
+AND 
+	Emin > 200604
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200605, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200605, @Term) 
+AND 
+	Emin > 200605
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200606, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200606, @Term) 
+AND 
+	Emin > 200606
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200607, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200607, @Term) 
+AND 
+	Emin > 200607
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200608, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200608, @Term) 
+AND 
+	Emin > 200608
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200609, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200609, @Term) 
+AND 
+	Emin > 200609
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200610, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200610, @Term) 
+AND 
+	Emin > 200610
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200611, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200611, @Term) 
+AND 
+	Emin > 200611
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200612, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200612, @Term) 
+AND 
+	Emin > 200612
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	200701, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200701, @Term) 
+AND 
+	Emin > 200701
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200702, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200702, @Term) 
+AND 
+	Emin > 200702
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200703, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200703, @Term) 
+AND 
+	Emin > 200703
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200704, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200704, @Term) 
+AND 
+	Emin > 200704
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200705, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200705, @Term) 
+AND 
+	Emin > 200705
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200706, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200706, @Term) 
+AND 
+	Emin > 200706
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200707, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200707, @Term) 
+AND 
+	Emin > 200707
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200708, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200708, @Term) 
+AND 
+	Emin > 200708
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200709, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200709, @Term) 
+AND 
+	Emin > 200709
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200710, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200710, @Term) 
+AND 
+	Emin > 200710
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200711, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200711, @Term) 
+AND 
+	Emin > 200711
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200712, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200712, @Term) 
+AND 
+	Emin > 200712
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	200801, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200801, @Term) 
+AND 
+	Emin > 200801
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200802, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200802, @Term) 
+AND 
+	Emin > 200802
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200803, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200803, @Term) 
+AND 
+	Emin > 200803
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200804, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200804, @Term) 
+AND 
+	Emin > 200804
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200805, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200805, @Term) 
+AND 
+	Emin > 200805
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200806, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200806, @Term) 
+AND 
+	Emin > 200806
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200807, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200807, @Term) 
+AND 
+	Emin > 200807
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200808, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200808, @Term) 
+AND 
+	Emin > 200808
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200809, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200809, @Term) 
+AND 
+	Emin > 200809
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200810, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200810, @Term) 
+AND 
+	Emin > 200810
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200811, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200811, @Term) 
+AND 
+	Emin > 200811
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200812, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200812, @Term) 
+AND 
+	Emin > 200812
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	200901, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200901, @Term) 
+AND 
+	Emin > 200901
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200902, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200902, @Term) 
+AND 
+	Emin > 200902
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200903, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200903, @Term) 
+AND 
+	Emin > 200903
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200904, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200904, @Term) 
+AND 
+	Emin > 200904
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200905, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200905, @Term) 
+AND 
+	Emin > 200905
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200906, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200906, @Term) 
+AND 
+	Emin > 200906
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200907, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200907, @Term) 
+AND 
+	Emin > 200907
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200908, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200908, @Term) 
+AND 
+	Emin > 200908
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200909, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200909, @Term) 
+AND 
+	Emin > 200909
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200910, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200910, @Term) 
+AND 
+	Emin > 200910
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200911, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200911, @Term) 
+AND 
+	Emin > 200911
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	200912, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(200912, @Term) 
+AND 
+	Emin > 200912
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201001, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201001, @Term) 
+AND 
+	Emin > 201001
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201002, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201002, @Term) 
+AND 
+	Emin > 201002
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201003, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201003, @Term) 
+AND 
+	Emin > 201003
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201004, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201004, @Term) 
+AND 
+	Emin > 201004
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201005, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201005, @Term) 
+AND 
+	Emin > 201005
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201006, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201006, @Term) 
+AND 
+	Emin > 201006
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201007, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201007, @Term) 
+AND 
+	Emin > 201007
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201008, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201008, @Term) 
+AND 
+	Emin > 201008
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201009, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201009, @Term) 
+AND 
+	Emin > 201009
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201010, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201010, @Term) 
+AND 
+	Emin > 201010
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201011, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201011, @Term) 
+AND 
+	Emin > 201011
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201012, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201012, @Term) 
+AND 
+	Emin > 201012
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201101, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201101, @Term) 
+AND 
+	Emin > 201101
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201102, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201102, @Term) 
+AND 
+	Emin > 201102
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201103, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201103, @Term) 
+AND 
+	Emin > 201103
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201104, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201104, @Term) 
+AND 
+	Emin > 201104
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201105, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201105, @Term) 
+AND 
+	Emin > 201105
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201106, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201106, @Term) 
+AND 
+	Emin > 201106
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201107, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201107, @Term) 
+AND 
+	Emin > 201107
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201108, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201108, @Term) 
+AND 
+	Emin > 201108
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201109, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201109, @Term) 
+AND 
+	Emin > 201109
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201110, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201110, @Term) 
+AND 
+	Emin > 201110
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201111, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201111, @Term) 
+AND 
+	Emin > 201111
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201112, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201112, @Term) 
+AND 
+	Emin > 201112
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201201, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201201, @Term) 
+AND 
+	Emin > 201201
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201202, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201202, @Term) 
+AND 
+	Emin > 201202
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201203, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201203, @Term) 
+AND 
+	Emin > 201203
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201204, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201204, @Term) 
+AND 
+	Emin > 201204
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201205, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201205, @Term) 
+AND 
+	Emin > 201205
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201206, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201206, @Term) 
+AND 
+	Emin > 201206
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201207, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201207, @Term) 
+AND 
+	Emin > 201207
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201208, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201208, @Term) 
+AND 
+	Emin > 201208
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201209, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201209, @Term) 
+AND 
+	Emin > 201209
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201210, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201210, @Term) 
+AND 
+	Emin > 201210
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201211, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201211, @Term) 
+AND 
+	Emin > 201211
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201212, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201212, @Term) 
+AND 
+	Emin > 201212
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201301, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201301, @Term) 
+AND 
+	Emin > 201301
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201302, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201302, @Term) 
+AND 
+	Emin > 201302
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201303, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201303, @Term) 
+AND 
+	Emin > 201303
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201304, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201304, @Term) 
+AND 
+	Emin > 201304
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201305, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201305, @Term) 
+AND 
+	Emin > 201305
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201306, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201306, @Term) 
+AND 
+	Emin > 201306
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201307, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201307, @Term) 
+AND 
+	Emin > 201307
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201308, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201308, @Term) 
+AND 
+	Emin > 201308
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201309, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201309, @Term) 
+AND 
+	Emin > 201309
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201310, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201310, @Term) 
+AND 
+	Emin > 201310
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201311, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201311, @Term) 
+AND 
+	Emin > 201311
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201312, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201312, @Term) 
+AND 
+	Emin > 201312
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201401, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201401, @Term) 
+AND 
+	Emin > 201401
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201402, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201402, @Term) 
+AND 
+	Emin > 201402
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201403, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201403, @Term) 
+AND 
+	Emin > 201403
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201404, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201404, @Term) 
+AND 
+	Emin > 201404
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201405, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201405, @Term) 
+AND 
+	Emin > 201405
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201406, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201406, @Term) 
+AND 
+	Emin > 201406
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201407, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201407, @Term) 
+AND 
+	Emin > 201407
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201408, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201408, @Term) 
+AND 
+	Emin > 201408
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201409, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201409, @Term) 
+AND 
+	Emin > 201409
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201410, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201410, @Term) 
+AND 
+	Emin > 201410
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201411, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201411, @Term) 
+AND 
+	Emin > 201411
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201412, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201412, @Term) 
+AND 
+	Emin > 201412
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201501, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201501, @Term) 
+AND 
+	Emin > 201501
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201502, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201502, @Term) 
+AND 
+	Emin > 201502
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201503, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201503, @Term) 
+AND 
+	Emin > 201503
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201504, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201504, @Term) 
+AND 
+	Emin > 201504
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201505, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201505, @Term) 
+AND 
+	Emin > 201505
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201506, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201506, @Term) 
+AND 
+	Emin > 201506
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201507, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201507, @Term) 
+AND 
+	Emin > 201507
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201508, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201508, @Term) 
+AND 
+	Emin > 201508
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201509, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201509, @Term) 
+AND 
+	Emin > 201509
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201510, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201510, @Term) 
+AND 
+	Emin > 201510
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201511, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201511, @Term) 
+AND 
+	Emin > 201511
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201512, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201512, @Term) 
+AND 
+	Emin > 201512
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201601, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201601, @Term) 
+AND 
+	Emin > 201601
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201602, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201602, @Term) 
+AND 
+	Emin > 201602
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201603, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201603, @Term) 
+AND 
+	Emin > 201603
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201604, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201604, @Term) 
+AND 
+	Emin > 201604
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201605, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201605, @Term) 
+AND 
+	Emin > 201605
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201606, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201606, @Term) 
+AND 
+	Emin > 201606
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201607, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201607, @Term) 
+AND 
+	Emin > 201607
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201608, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201608, @Term) 
+AND 
+	Emin > 201608
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201609, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201609, @Term) 
+AND 
+	Emin > 201609
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201610, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201610, @Term) 
+AND 
+	Emin > 201610
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201611, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201611, @Term) 
+AND 
+	Emin > 201611
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201612, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201612, @Term) 
+AND 
+	Emin > 201612
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201701, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201701, @Term) 
+AND 
+	Emin > 201701
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201702, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201702, @Term) 
+AND 
+	Emin > 201702
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201703, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201703, @Term) 
+AND 
+	Emin > 201703
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201704, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201704, @Term) 
+AND 
+	Emin > 201704
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201705, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201705, @Term) 
+AND 
+	Emin > 201705
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201706, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201706, @Term) 
+AND 
+	Emin > 201706
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201707, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201707, @Term) 
+AND 
+	Emin > 201707
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201708, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201708, @Term) 
+AND 
+	Emin > 201708
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201709, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201709, @Term) 
+AND 
+	Emin > 201709
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201710, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201710, @Term) 
+AND 
+	Emin > 201710
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201711, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201711, @Term) 
+AND 
+	Emin > 201711
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201712, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201712, @Term) 
+AND 
+	Emin > 201712
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201801, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201801, @Term) 
+AND 
+	Emin > 201801
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201802, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201802, @Term) 
+AND 
+	Emin > 201802
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201803, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201803, @Term) 
+AND 
+	Emin > 201803
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201804, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201804, @Term) 
+AND 
+	Emin > 201804
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201805, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201805, @Term) 
+AND 
+	Emin > 201805
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201806, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201806, @Term) 
+AND 
+	Emin > 201806
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201807, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201807, @Term) 
+AND 
+	Emin > 201807
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201808, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201808, @Term) 
+AND 
+	Emin > 201808
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201809, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201809, @Term) 
+AND 
+	Emin > 201809
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201810, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201810, @Term) 
+AND 
+	Emin > 201810
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201811, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201811, @Term) 
+AND 
+	Emin > 201811
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201812, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201812, @Term) 
+AND 
+	Emin > 201812
+;
+
+-- 
+INSERT INTO postEventTotal 
+SELECT 
+	201901, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201901, @Term) 
+AND 
+	Emin > 201901
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201902, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201902, @Term) 
+AND 
+	Emin > 201902
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201903, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201903, @Term) 
+AND 
+	Emin > 201903
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201904, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201904, @Term) 
+AND 
+	Emin > 201904
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201905, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201905, @Term) 
+AND 
+	Emin > 201905
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201906, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201906, @Term) 
+AND 
+	Emin > 201906
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201907, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201907, @Term) 
+AND 
+	Emin > 201907
+;
+
+INSERT INTO postEventTotal 
+SELECT 
+	201908, 
+	CASE WHEN SUM(Count) IS NULL THEN 0 ELSE SUM(Count) END AS COUNT
+FROM 
+	Incident_outcome 
+WHERE 
+	Emin <= PERIOD_ADD(201908, @Term) 
+AND 
+	Emin > 201908
+;
+
+
+DROP TABLE IF EXISTS NSR_MonthTable_Result_pre;
+CREATE TABLE NSR_MonthTable_Result_pre
+SELECT 
+	t1.Months, 
+	t2.Count AS AminCount, 
+	t3.Count AS EminCount, 
+	t4.preTotal, 
+	t5.postTotal
+FROM 
+	NSR_MonthTable AS t1
+    LEFT OUTER JOIN Incident_exposure t2 ON t1.Months = t2.Amin
+	LEFT OUTER JOIN Incident_outcome t3 ON t1.Months = t3.Emin
+	LEFT OUTER JOIN preEventTotal t4 ON t1.Months = t4.Months
+	LEFT OUTER JOIN postEventTotal t5 ON t1.Months = t5.Months
+;
+
+
+DROP TABLE IF EXISTS NSR_MonthTable_Result;
+CREATE TABLE NSR_MonthTable_Result
+SELECT 
+	*, 
+	AminCount * postTotal AS molecule, 
+	AminCount * (preTotal + postTotal) AS denominator
+FROM 
+	NSR_MonthTable_Result_pre
+;
+
+
+-- NSR
+SELECT SUM(molecule) / SUM(denominator) INTO @x FROM NSR_MonthTable_Result;
+SELECT @x / (1 - @x) INTO @NSR;
+
+
+-- CSR
+SELECT @a / @b INTO @CSR;
+
+# CSR_lower
+SELECT exp(log(@CSR) - 1.96 * sqrt(1/@a + 1/@b)) INTO @CSR_lower;
+
+# CSR_upper
+SELECT exp(log(@CSR) + 1.96 * sqrt(1/@a + 1/@b)) INTO @CSR_upper;
+
+
+-- ASR
+SELECT @CSR/@NSR INTO @ASR;
+SELECT @CSR_lower/@NSR INTO @ASR_lower;
+SELECT @CSR_upper/@NSR INTO @ASR_upper;
+
+
+-- 3.7 Insert
+SET
+    @insertvalue = CONCAT('INSERT INTO SSA_Analysis_15y VALUES 
+						  ("', ingredient, '", "', ICD10class, '", ', Runinperiod, ', 
+						  @Term, @a, @b, @c, @CSR, @CSR_lower, @CSR_upper, 
+						  @NSR, @ASR, @ASR_lower, @ASR_upper, ', Ground_Truth, ');')
+;
+PREPARE insertvalue from @insertvalue;
+EXECUTE insertvalue;
+
+
+################################
+-- 4. Drop tables
+DROP TABLE IF EXISTS Drug_A;
+DROP TABLE IF EXISTS Drug_AO;
+DROP TABLE IF EXISTS Event_E;
+DROP TABLE IF EXISTS Event_EO;
+DROP TABLE IF EXISTS A_JMDC_ESSA;
+DROP TABLE IF EXISTS Incident_exposure;
+DROP TABLE IF EXISTS Incident_outcome;
+DROP TABLE IF EXISTS preEventTotal;
+DROP TABLE IF EXISTS postEventTotal;
+DROP TABLE IF EXISTS NSR_MonthTable;
+DROP TABLE IF EXISTS NSR_MonthTable_Result_pre;
+DROP TABLE IF EXISTS NSR_MonthTable_Result;
+
+
+END //
+DELIMITER ;
+
+
+#########################################
+-- 5. Call procedure
+# Positive control
+CALL ESSA_PROCEDURE('アシクロビル', 'N17', 6, 1);
+CALL ESSA_PROCEDURE('アムロジピンベシル酸塩', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('アロプリノール', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('イブプロフェン', 'N17', 6, 1);
+CALL ESSA_PROCEDURE('イブプロフェン', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('イブプロフェン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('インドメタシン', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('インドメタシン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('インドメタシン', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('エスシタロプラムシュウ酸塩', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('エストラジオール', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('エトドラク', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('エトドラク', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('エトドラク', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('エポエチン　アルファ（遺伝子組換え）', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('エリスロマイシン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('オキサプロジン', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('オキサプロジン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('オキサプロジン', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('オフロキサシン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('オルメサルタン　メドキソミル', 'N17', 6, 1);
+CALL ESSA_PROCEDURE('カルバマゼピン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('キナプリル塩酸塩', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('クリンダマイシン塩酸塩', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('クロピドグレル硫酸塩', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('シクロスポリン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ジピリダモール', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('シプロフロキサシン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ジルチアゼム塩酸塩', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('スマトリプタン', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('スリンダク', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('スリンダク', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('セルトラリン塩酸塩', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('セレコキシブ', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('タモキシフェンクエン酸塩', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ダルベポエチン　アルファ（遺伝子組換え）', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('テルビナフィン塩酸塩', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('トランドラプリル', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ナプロキセン', 'N17', 6, 1);
+CALL ESSA_PROCEDURE('ナプロキセン', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('ナプロキセン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ニフェジピン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ニフェジピン', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('ノルトリプチリン塩酸塩', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ノルトリプチリン塩酸塩', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('バルプロ酸ナトリウム', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ピオグリタゾン塩酸塩', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ヒドロクロロチアジド', 'N17', 6, 1);
+CALL ESSA_PROCEDURE('ピロキシカム', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('ピロキシカム', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('ピロキシカム', 'I21', 6, 1);
+CALL ESSA_PROCEDURE('フルコナゾール', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('メトトレキサート', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('メロキシカム', 'N17', 6, 1);
+CALL ESSA_PROCEDURE('メロキシカム', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('ラモトリギン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('リシノプリル', 'N17', 6, 1);
+CALL ESSA_PROCEDURE('リシノプリル', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('レボフロキサシン', 'K71', 6, 1);
+CALL ESSA_PROCEDURE('塩化カリウム', 'K92', 6, 1);
+CALL ESSA_PROCEDURE('結合型エストロゲン', 'I21', 6, 1);
+
+# Negative control
+CALL ESSA_PROCEDURE('アデノシン三リン酸二ナトリウム水和物', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('アデノシン三リン酸二ナトリウム水和物', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('エポエチン　アルファ（遺伝子組換え）', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('オキシブチニン塩酸塩', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('オキシブチニン塩酸塩', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('オキシブチニン塩酸塩', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('ガチフロキサシン水和物', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('ガチフロキサシン水和物', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('グリセオフルビン', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('クリンダマイシン塩酸塩', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('ジサイクロミン塩酸塩', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('ジサイクロミン塩酸塩', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('ジサイクロミン塩酸塩', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('シタグリプチンリン酸塩水和物', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('シタグリプチンリン酸塩水和物', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('シタグリプチンリン酸塩水和物', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('スクラルファート水和物', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('スクラルファート水和物', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('スクラルファート水和物', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('テルビナフィン塩酸塩', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('テルビナフィン塩酸塩', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('ピオグリタゾン塩酸塩', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('ブチルスコポラミン臭化物', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('ブチルスコポラミン臭化物', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('ブチルスコポラミン臭化物', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('プロクロルペラジンマレイン酸塩', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('プロクロルペラジンマレイン酸塩', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('ベンジルペニシリンベンザチン水和物', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('ベンジルペニシリンベンザチン水和物', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('ベンジルペニシリンベンザチン水和物', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('メトカルバモール', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('メトカルバモール', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('ラクツロース', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('ラクツロース', 'K71', 6, 0);
+CALL ESSA_PROCEDURE('ラクツロース', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('ラメルテオン', 'I21', 6, 0);
+CALL ESSA_PROCEDURE('ロラタジン', 'N17', 6, 0);
+CALL ESSA_PROCEDURE('ロラタジン', 'K92', 6, 0);
+CALL ESSA_PROCEDURE('ロラタジン', 'I21', 6, 0);
+
